@@ -1,379 +1,189 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { useEffect, useState, useRef, useCallback, useMemo } from 'react'
-import { Settings } from 'lucide-react'
-import {
-  SettingsDialog,
-  ChatMessage,
-  LoadingIndicator,
-  ChatInput,
-  Sidebar,
-  WelcomeScreen,
-  TopBanner
-} from '../components'
-import { useConversations, useAppState, store, actions } from '../store'
-import { genAIResponse, type Message } from '../utils'
+import { useStore } from '@tanstack/react-store'
+import { store, selectors, actions } from '../store'
+import { Plus, Flame, Clock, Target, Sparkles } from 'lucide-react'
 
-function Home() {
-  const {
-    conversations,
-    currentConversationId,
-    currentConversation,
-    setCurrentConversationId,
-    createNewConversation,
-    updateConversationTitle,
-    deleteConversation,
-    addMessage,
-  } = useConversations()
-  
-  const { isLoading, setLoading, getActivePrompt } = useAppState()
+const motivationalMessages = [
+  "You crushed it today!",
+  "Keep going, you're on fire!",
+  "Every session counts — you've got this!",
+  "Champion mindset, champion results!",
+  "Your dedication is inspiring!",
+]
 
-  // Memoize messages to prevent unnecessary re-renders
-  const messages = useMemo(() => currentConversation?.messages || [], [currentConversation]);
-
-  // Local state
-  const [input, setInput] = useState('')
-  const [editingChatId, setEditingChatId] = useState<string | null>(null)
-  const [editingTitle, setEditingTitle] = useState('')
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false)
-  const messagesContainerRef = useRef<HTMLDivElement>(null)
-  const [pendingMessage, setPendingMessage] = useState<Message | null>(null)
-  const [error, setError] = useState<string | null>(null);
-
-  const scrollToBottom = useCallback((smooth: boolean = false) => {
-    if (messagesContainerRef.current) {
-      messagesContainerRef.current.scrollTo({
-        top: messagesContainerRef.current.scrollHeight,
-        behavior: smooth ? 'smooth' : 'auto'
-      })
-    }
-  }, []);
-
-  // Scroll to bottom when messages change or loading state changes
-  useEffect(() => {
-    scrollToBottom(false)
-  }, [messages, scrollToBottom])
-
-  // Smooth scroll during streaming
-  useEffect(() => {
-    if (pendingMessage && isLoading) {
-      scrollToBottom(true)
-    }
-  }, [pendingMessage, isLoading, scrollToBottom])
-
-  const createTitleFromInput = useCallback((text: string) => {
-    const words = text.trim().split(/\s+/)
-    const firstThreeWords = words.slice(0, 3).join(' ')
-    return firstThreeWords + (words.length > 3 ? '...' : '')
-  }, []);
-
-  // Helper function to process AI response
-  const processAIResponse = useCallback(async (conversationId: string, userMessage: Message) => {
-    try {
-      // Get active prompt
-      const activePrompt = getActivePrompt(store.state)
-      let systemPrompt
-      if (activePrompt) {
-        systemPrompt = {
-          value: activePrompt.content,
-          enabled: true,
-        }
-      }
-
-      // Get AI response
-      const response = await genAIResponse({
-        data: {
-          messages: [...messages, userMessage],
-          systemPrompt,
-        },
-      })
-
-      const reader = response.body?.getReader()
-      if (!reader) {
-        throw new Error('No reader found in response')
-      }
-
-      const decoder = new TextDecoder()
-
-      let done = false
-      let newMessage = {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant' as const,
-        content: '',
-      }
-      let buffer = '' // Buffer to accumulate partial JSON chunks
-      let pendingTextQueue: string[] = [] // Queue of text chunks to render
-      let isRendering = false
-
-      // Smooth character-by-character rendering with adaptive speed
-      const renderTextSmoothly = async () => {
-        if (isRendering) return
-        isRendering = true
-
-        while (pendingTextQueue.length > 0) {
-          const chunk = pendingTextQueue.shift()!
-
-          // Adaptive rendering: faster for code blocks, smoother for regular text
-          const isCodeBlock = newMessage.content.includes('```') &&
-                             newMessage.content.split('```').length % 2 === 0
-
-          // Characters per frame and delay based on content type
-          const charsPerFrame = isCodeBlock ? 5 : 2 // Faster for code
-          const delay = isCodeBlock ? 2 : 5 // Shorter delay for code
-
-          for (let i = 0; i < chunk.length; i += charsPerFrame) {
-            const slice = chunk.slice(i, i + charsPerFrame)
-            newMessage = {
-              ...newMessage,
-              content: newMessage.content + slice,
-            }
-            setPendingMessage({ ...newMessage })
-
-            // Dynamic delay for natural typing rhythm
-            // ~200-400 chars per second for text, ~500 chars per second for code
-            await new Promise(resolve => setTimeout(resolve, delay))
-          }
-        }
-
-        isRendering = false
-      }
-
-      const scheduleUIUpdate = (text: string) => {
-        pendingTextQueue.push(text)
-        renderTextSmoothly()
-      }
-
-      while (!done) {
-        const out = await reader.read()
-        done = out.done
-        if (!done && out.value) {
-          // Decode the chunk and add to buffer
-          buffer += decoder.decode(out.value, { stream: true })
-
-          // Split by newlines to get complete JSON objects
-          const lines = buffer.split('\n')
-
-          // Keep the last incomplete line in the buffer
-          buffer = lines.pop() || ''
-
-          // Process each complete line
-          for (const line of lines) {
-            if (line.trim()) {
-              try {
-                const json = JSON.parse(line)
-                if (json.type === 'content_block_delta' && json.delta?.text) {
-                  scheduleUIUpdate(json.delta.text)
-                }
-              } catch (e) {
-                console.error('Error parsing streaming response:', e, 'Line:', line)
-              }
-            }
-          }
-        }
-      }
-
-      // Wait for any remaining text to finish rendering
-      while (pendingTextQueue.length > 0 || isRendering) {
-        await new Promise(resolve => setTimeout(resolve, 50))
-      }
-
-      setPendingMessage(null)
-      if (newMessage.content.trim()) {
-        // Add AI message to Convex
-        console.log('Adding AI response to conversation:', conversationId)
-        await addMessage(conversationId, newMessage)
-      }
-    } catch (error) {
-      console.error('Error in AI response:', error)
-      // Add an error message to the conversation
-      const errorMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant' as const,
-        content: 'Sorry, I encountered an error generating a response. Please set the required API keys in your environment variables.',
-      }
-      await addMessage(conversationId, errorMessage)
-    }
-  }, [messages, getActivePrompt, addMessage]);
-
-  const handleSubmit = useCallback(async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!input.trim() || isLoading) return
-
-    const currentInput = input
-    setInput('') // Clear input early for better UX
-    setLoading(true)
-    setError(null)
-    
-    const conversationTitle = createTitleFromInput(currentInput)
-
-    try {
-      // Create the user message object
-      const userMessage: Message = {
-        id: Date.now().toString(),
-        role: 'user' as const,
-        content: currentInput.trim(),
-      }
-      
-      let conversationId = currentConversationId
-
-      // If no current conversation, create one in Convex first
-      if (!conversationId) {
-        try {
-          console.log('Creating new Convex conversation with title:', conversationTitle)
-          // Create a new conversation with our title
-          const convexId = await createNewConversation(conversationTitle)
-          
-          if (convexId) {
-            console.log('Successfully created Convex conversation with ID:', convexId)
-            conversationId = convexId
-            
-            // Add user message directly to Convex
-            console.log('Adding user message to Convex conversation:', userMessage.content)
-            await addMessage(conversationId, userMessage)
-          } else {
-            console.warn('Failed to create Convex conversation, falling back to local')
-            // Fallback to local storage if Convex creation failed
-            const tempId = Date.now().toString()
-            const tempConversation = {
-              id: tempId,
-              title: conversationTitle,
-              messages: [],
-            }
-            
-            actions.addConversation(tempConversation)
-            conversationId = tempId
-            
-            // Add user message to local state
-            actions.addMessage(conversationId, userMessage)
-          }
-        } catch (error) {
-          console.error('Error creating conversation:', error)
-          throw new Error('Failed to create conversation')
-        }
-      } else {
-        // We already have a conversation ID, add message directly to Convex
-        console.log('Adding user message to existing conversation:', conversationId)
-        await addMessage(conversationId, userMessage)
-      }
-      
-      // Process with AI after message is stored
-      await processAIResponse(conversationId, userMessage)
-      
-    } catch (error) {
-      console.error('Error:', error)
-      const errorMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant' as const,
-        content: 'Sorry, I encountered an error processing your request.',
-      }
-      if (currentConversationId) {
-        await addMessage(currentConversationId, errorMessage)
-      }
-      else {
-        if (error instanceof Error) {
-          setError(error.message)
-        } else {
-          setError('An unknown error occurred.')
-        }
-      }
-    } finally {
-      setLoading(false)
-    }
-  }, [input, isLoading, createTitleFromInput, currentConversationId, createNewConversation, addMessage, processAIResponse, setLoading]);
-
-  const handleNewChat = useCallback(() => {
-    createNewConversation()
-  }, [createNewConversation]);
-
-  const handleDeleteChat = useCallback(async (id: string) => {
-    await deleteConversation(id)
-  }, [deleteConversation]);
-
-  const handleUpdateChatTitle = useCallback(async (id: string, title: string) => {
-    await updateConversationTitle(id, title)
-    setEditingChatId(null)
-    setEditingTitle('')
-  }, [updateConversationTitle]);
+function Dashboard() {
+  const state = useStore(store, s => s)
+  const todayActivities = selectors.getTodayActivities(state)
+  const todayMinutes = selectors.getTodayMinutes(state)
+  const weeklyMinutes = selectors.getWeeklyMinutes(state)
+  const motivMessage = motivationalMessages[Math.floor(Date.now() / 86400000) % motivationalMessages.length]
 
   return (
-    <div className="relative flex h-screen bg-gray-900">
-      {/* Settings Button */}
-      <div className="absolute z-50 top-5 right-5">
-        <button
-          onClick={() => setIsSettingsOpen(true)}
-          className="flex items-center justify-center w-10 h-10 text-white transition-opacity rounded-full bg-gradient-to-r from-orange-500 to-red-600 hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-orange-500"
-        >
-          <Settings className="w-5 h-5" />
-        </button>
+    <div className="min-h-screen bg-slate-950 pb-20">
+      {/* Header */}
+      <div className="bg-gradient-to-br from-slate-900 via-slate-900 to-cyan-950 px-5 pt-12 pb-6">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <p className="text-slate-400 text-sm">Welcome back,</p>
+            <h1 className="text-2xl font-bold text-white">{state.userName}</h1>
+          </div>
+          <div className="flex items-center gap-2 bg-gradient-to-r from-orange-500/20 to-rose-500/20 border border-orange-500/30 rounded-full px-4 py-2">
+            <Flame className="w-5 h-5 text-orange-400" />
+            <span className="text-orange-300 font-bold text-sm">{state.streak} day streak</span>
+          </div>
+        </div>
+
+        {/* Motivational Banner */}
+        <div className="bg-gradient-to-r from-cyan-500/10 to-purple-500/10 border border-cyan-500/20 rounded-2xl p-4 flex items-center gap-3">
+          <Sparkles className="w-6 h-6 text-cyan-400 flex-shrink-0" />
+          <p className="text-cyan-200 text-sm font-medium">{motivMessage}</p>
+        </div>
       </div>
 
-      {/* Sidebar */}
-      <Sidebar 
-        conversations={conversations}
-        currentConversationId={currentConversationId}
-        handleNewChat={handleNewChat}
-        setCurrentConversationId={setCurrentConversationId}
-        handleDeleteChat={handleDeleteChat}
-        editingChatId={editingChatId}
-        setEditingChatId={setEditingChatId}
-        editingTitle={editingTitle}
-        setEditingTitle={setEditingTitle}
-        handleUpdateChatTitle={handleUpdateChatTitle}
-      />
-
-      {/* Main Content */}
-      <div className="flex flex-col flex-1">
-        <TopBanner />
-        {error && (
-          <p className="w-full max-w-3xl p-4 mx-auto font-bold text-orange-500">{error}</p>
-        )}
-        {currentConversationId ? (
-          <>
-            {/* Messages */}
-            <div
-              ref={messagesContainerRef}
-              className="flex-1 pb-24 overflow-y-auto messages-container"
-            >
-              <div className="w-full max-w-3xl px-4 mx-auto">
-                {[...messages, pendingMessage]
-                  .filter((message): message is Message => message !== null)
-                  .map((message) => (
-                    <ChatMessage
-                      key={message.id}
-                      message={message}
-                      isStreaming={message === pendingMessage && isLoading}
-                    />
-                  ))}
-                {isLoading && <LoadingIndicator />}
-              </div>
+      <div className="px-5 space-y-5">
+        {/* Quick Stats */}
+        <div className="grid grid-cols-2 gap-3 mt-5">
+          <div className="bg-slate-800/80 backdrop-blur-sm border border-white/5 rounded-2xl p-4">
+            <div className="flex items-center gap-2 mb-2">
+              <Clock className="w-4 h-4 text-cyan-400" />
+              <span className="text-xs text-slate-400 font-medium">Today</span>
             </div>
+            <p className="text-2xl font-bold text-white">
+              {todayMinutes}<span className="text-sm text-slate-400 ml-1">min</span>
+            </p>
+            <p className="text-xs text-slate-500 mt-1">{todayActivities.length} activities</p>
+          </div>
+          <div className="bg-slate-800/80 backdrop-blur-sm border border-white/5 rounded-2xl p-4">
+            <div className="flex items-center gap-2 mb-2">
+              <Target className="w-4 h-4 text-purple-400" />
+              <span className="text-xs text-slate-400 font-medium">This Week</span>
+            </div>
+            <p className="text-2xl font-bold text-white">
+              {weeklyMinutes}<span className="text-sm text-slate-400 ml-1">min</span>
+            </p>
+            <p className="text-xs text-slate-500 mt-1">{state.sports.length} sports active</p>
+          </div>
+        </div>
 
-            {/* Input */}
-            <ChatInput 
-              input={input}
-              setInput={setInput}
-              handleSubmit={handleSubmit}
-              isLoading={isLoading}
-            />
-          </>
-        ) : (
-          <WelcomeScreen 
-            input={input}
-            setInput={setInput}
-            handleSubmit={handleSubmit}
-            isLoading={isLoading}
-          />
-        )}
+        {/* Log Activity Button */}
+        <button
+          onClick={() => actions.toggleLogModal(true)}
+          className="w-full py-4 rounded-2xl bg-gradient-to-r from-cyan-500 to-teal-500 text-white font-semibold text-base flex items-center justify-center gap-2 hover:from-cyan-400 hover:to-teal-400 transition-all active:scale-[0.98] shadow-lg shadow-cyan-500/20"
+        >
+          <Plus className="w-5 h-5" />
+          Log Activity
+        </button>
+
+        {/* Goals Progress */}
+        <div>
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-lg font-bold text-white">Your Goals</h2>
+            <span className="text-xs text-slate-400">
+              {state.goals.filter(g => g.current >= g.target).length}/{state.goals.length} complete
+            </span>
+          </div>
+          <div className="space-y-3">
+            {state.goals.slice(0, 3).map(goal => {
+              const percent = Math.min(100, Math.round((goal.current / goal.target) * 100))
+              const isComplete = goal.current >= goal.target
+              return (
+                <div key={goal.id} className="bg-slate-800/80 backdrop-blur-sm border border-white/5 rounded-2xl p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm font-medium text-white">{goal.title}</span>
+                    <span className={`text-xs font-bold ${isComplete ? 'text-emerald-400' : 'text-cyan-400'}`}>
+                      {percent}%
+                    </span>
+                  </div>
+                  <div className="w-full h-2 bg-slate-700 rounded-full overflow-hidden">
+                    <div
+                      className={`h-full rounded-full transition-all duration-500 ${
+                        isComplete
+                          ? 'bg-gradient-to-r from-emerald-500 to-emerald-400'
+                          : 'bg-gradient-to-r from-cyan-500 to-teal-400'
+                      }`}
+                      style={{ width: `${percent}%` }}
+                    />
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+
+        {/* Today's Activities */}
+        <div>
+          <h2 className="text-lg font-bold text-white mb-3">Today's Activities</h2>
+          {todayActivities.length > 0 ? (
+            <div className="space-y-2">
+              {todayActivities.map(activity => {
+                const sport = state.sports.find(s => s.id === activity.sportId)
+                return (
+                  <div
+                    key={activity.id}
+                    className="bg-slate-800/80 backdrop-blur-sm border border-white/5 rounded-2xl p-4 flex items-center gap-4"
+                  >
+                    <div
+                      className={`w-12 h-12 rounded-xl bg-gradient-to-br ${sport?.bgGradient || 'from-slate-600 to-slate-700'} flex items-center justify-center text-xl`}
+                    >
+                      {sport?.emoji}
+                    </div>
+                    <div className="flex-1">
+                      <p className="text-white font-medium text-sm">{sport?.name}</p>
+                      <p className="text-slate-400 text-xs">{activity.notes}</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-white font-bold text-sm">{activity.duration}m</p>
+                      <p
+                        className={`text-xs capitalize ${
+                          activity.intensity === 'light'
+                            ? 'text-emerald-400'
+                            : activity.intensity === 'moderate'
+                              ? 'text-amber-400'
+                              : 'text-rose-400'
+                        }`}
+                      >
+                        {activity.intensity}
+                      </p>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          ) : (
+            <div className="bg-slate-800/80 border border-white/5 rounded-2xl p-8 text-center">
+              <p className="text-slate-400 text-sm">No activities yet today</p>
+              <p className="text-slate-500 text-xs mt-1">Tap "Log Activity" to get started!</p>
+            </div>
+          )}
+        </div>
+
+        {/* Recent Activity Feed */}
+        <div>
+          <h2 className="text-lg font-bold text-white mb-3">Recent Activity</h2>
+          <div className="space-y-2">
+            {state.activities.slice(0, 5).map(activity => {
+              const sport = state.sports.find(s => s.id === activity.sportId)
+              return (
+                <div
+                  key={activity.id}
+                  className="bg-slate-800/50 border border-white/5 rounded-xl p-3 flex items-center gap-3"
+                >
+                  <span className="text-lg">{sport?.emoji}</span>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-white text-sm font-medium truncate">{activity.notes}</p>
+                    <p className="text-slate-500 text-xs">{activity.date}</p>
+                  </div>
+                  <span className="text-slate-400 text-xs font-medium">{activity.duration}m</span>
+                </div>
+              )
+            })}
+          </div>
+        </div>
       </div>
-
-      {/* Settings Dialog */}
-      <SettingsDialog
-        isOpen={isSettingsOpen}
-        onClose={() => setIsSettingsOpen(false)}
-      />
     </div>
   )
 }
 
 export const Route = createFileRoute('/')({
-  component: Home,
+  component: Dashboard,
 })
