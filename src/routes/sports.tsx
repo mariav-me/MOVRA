@@ -1,7 +1,14 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { useStore } from '@tanstack/react-store'
-import { store, actions } from '../store'
+import { store, actions, sportSubActivities } from '../store'
 import { Plus, Clock, Calendar } from 'lucide-react'
+
+function getSubActivityLabel(sportId: string, subActivityId: string): string {
+  const subs = sportSubActivities[sportId]
+  if (!subs) return subActivityId
+  const found = subs.find(s => s.id === subActivityId)
+  return found ? found.label : subActivityId
+}
 
 function MySports() {
   const sports = useStore(store, s => s.sports)
@@ -79,7 +86,14 @@ function MySports() {
                         >
                           <div className="min-w-0 flex-1">
                             <p className="text-white text-xs truncate">{activity.notes}</p>
-                            <p className="text-slate-500 text-[10px]">{activity.date}</p>
+                            <div className="flex items-center gap-2">
+                              {activity.subActivity && (
+                                <span className="text-cyan-400 text-[10px] font-medium">
+                                  {getSubActivityLabel(activity.sportId, activity.subActivity)}
+                                </span>
+                              )}
+                              <span className="text-slate-500 text-[10px]">{activity.date}</span>
+                            </div>
                           </div>
                           <div className="flex items-center gap-2 ml-2">
                             <span

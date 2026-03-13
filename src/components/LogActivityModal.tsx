@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
-import { X, Clock, Flame, FileText } from 'lucide-react'
+import { X, Clock, Flame, FileText, Tag } from 'lucide-react'
 import { useStore } from '@tanstack/react-store'
-import { store, actions } from '../store'
+import { store, actions, sportSubActivities } from '../store'
 
 export function LogActivityModal() {
   const showLogModal = useStore(store, s => s.showLogModal)
@@ -9,20 +9,32 @@ export function LogActivityModal() {
   const sports = useStore(store, s => s.sports)
 
   const [sportId, setSportId] = useState('')
+  const [subActivity, setSubActivity] = useState('')
+  const [customSubActivity, setCustomSubActivity] = useState('')
   const [duration, setDuration] = useState(30)
   const [intensity, setIntensity] = useState<'light' | 'moderate' | 'intense'>('moderate')
   const [notes, setNotes] = useState('')
+
+  const currentSubActivities = sportId ? (sportSubActivities[sportId] || []) : []
 
   useEffect(() => {
     if (selectedSportId) setSportId(selectedSportId)
     else if (sports.length > 0) setSportId(sports[0].id)
   }, [selectedSportId, sports])
 
+  // Reset sub-activity when sport changes
+  useEffect(() => {
+    setSubActivity('')
+    setCustomSubActivity('')
+  }, [sportId])
+
   if (!showLogModal) return null
 
   const handleSubmit = () => {
+    const resolvedSubActivity = subActivity === 'other' ? (customSubActivity || 'Other') : subActivity
     actions.logActivity({
       sportId,
+      subActivity: resolvedSubActivity,
       date: new Date().toISOString().split('T')[0],
       duration,
       notes,
@@ -32,6 +44,8 @@ export function LogActivityModal() {
     setDuration(30)
     setIntensity('moderate')
     setNotes('')
+    setSubActivity('')
+    setCustomSubActivity('')
   }
 
   return (
@@ -40,7 +54,7 @@ export function LogActivityModal() {
         className="absolute inset-0 bg-black/60 backdrop-blur-sm"
         onClick={() => actions.toggleLogModal(false)}
       />
-      <div className="relative w-full max-w-md bg-slate-800 border border-white/10 rounded-t-3xl sm:rounded-2xl p-6 pb-8 z-10 animate-slide-up">
+      <div className="relative w-full max-w-md bg-slate-800 border border-white/10 rounded-t-3xl sm:rounded-2xl p-6 pb-8 z-10 animate-slide-up max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between mb-6">
           <h2 className="text-xl font-bold text-white">Log Activity</h2>
           <button
@@ -54,7 +68,7 @@ export function LogActivityModal() {
         {/* Sport Selection */}
         <div className="mb-5">
           <label className="block text-sm font-medium text-slate-300 mb-2">Sport</label>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-2 gap-2 max-h-40 overflow-y-auto pr-1">
             {sports.map(sport => (
               <button
                 key={sport.id}
@@ -66,11 +80,44 @@ export function LogActivityModal() {
                 }`}
               >
                 <span className="text-lg">{sport.emoji}</span>
-                <span className="text-sm font-medium">{sport.name}</span>
+                <span className="text-sm font-medium truncate">{sport.name}</span>
               </button>
             ))}
           </div>
         </div>
+
+        {/* Sub-Activity Selection */}
+        {currentSubActivities.length > 0 && (
+          <div className="mb-5">
+            <label className="block text-sm font-medium text-slate-300 mb-2">
+              <Tag className="w-4 h-4 inline mr-1" /> Activity Type
+            </label>
+            <div className="flex flex-wrap gap-2">
+              {currentSubActivities.map(sub => (
+                <button
+                  key={sub.id}
+                  onClick={() => setSubActivity(sub.id)}
+                  className={`px-3 py-2 rounded-xl border text-sm font-medium transition-all ${
+                    subActivity === sub.id
+                      ? 'border-cyan-500 bg-cyan-500/10 text-cyan-300'
+                      : 'border-white/10 bg-white/5 text-slate-400 hover:border-white/20'
+                  }`}
+                >
+                  {sub.label}
+                </button>
+              ))}
+            </div>
+            {subActivity === 'other' && (
+              <input
+                type="text"
+                value={customSubActivity}
+                onChange={e => setCustomSubActivity(e.target.value)}
+                placeholder="Describe your activity..."
+                className="w-full mt-2 p-3 rounded-xl bg-white/5 border border-white/10 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-cyan-500/50 focus:ring-1 focus:ring-cyan-500/30"
+              />
+            )}
+          </div>
+        )}
 
         {/* Duration */}
         <div className="mb-5">

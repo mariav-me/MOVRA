@@ -1,7 +1,14 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { useStore } from '@tanstack/react-store'
-import { store, selectors, actions } from '../store'
+import { store, selectors, actions, sportSubActivities } from '../store'
 import { Plus, Flame, Clock, Target, Sparkles } from 'lucide-react'
+
+function getSubActivityLabel(sportId: string, subActivityId: string): string {
+  const subs = sportSubActivities[sportId]
+  if (!subs) return subActivityId
+  const found = subs.find(s => s.id === subActivityId)
+  return found ? found.label : subActivityId
+}
 
 const motivationalMessages = [
   "You crushed it today!",
@@ -129,6 +136,11 @@ function Dashboard() {
                     </div>
                     <div className="flex-1">
                       <p className="text-white font-medium text-sm">{sport?.name}</p>
+                      {activity.subActivity && (
+                        <p className="text-cyan-400 text-xs font-medium">
+                          {getSubActivityLabel(activity.sportId, activity.subActivity)}
+                        </p>
+                      )}
                       <p className="text-slate-400 text-xs">{activity.notes}</p>
                     </div>
                     <div className="text-right">
@@ -171,7 +183,14 @@ function Dashboard() {
                   <span className="text-lg">{sport?.emoji}</span>
                   <div className="flex-1 min-w-0">
                     <p className="text-white text-sm font-medium truncate">{activity.notes}</p>
-                    <p className="text-slate-500 text-xs">{activity.date}</p>
+                    <div className="flex items-center gap-2">
+                      {activity.subActivity && (
+                        <span className="text-cyan-400 text-xs font-medium">
+                          {getSubActivityLabel(activity.sportId, activity.subActivity)}
+                        </span>
+                      )}
+                      <span className="text-slate-500 text-xs">{activity.date}</span>
+                    </div>
                   </div>
                   <span className="text-slate-400 text-xs font-medium">{activity.duration}m</span>
                 </div>
